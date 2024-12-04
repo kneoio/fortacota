@@ -1,36 +1,40 @@
-from dotenv import load_dotenv
 import os
-import pika
-import ssl
+
+import stomp
+from dotenv import load_dotenv
+
+from utils.logger import logger
 
 load_dotenv()
 
-credentials = pika.PlainCredentials(
-   os.getenv('RABBITMQ_USER'),
-   os.getenv('RABBITMQ_PASS')
-)
+HOST = os.getenv('MQ_HOST')
+PORT = int(os.getenv('MQ_PORT', 61614))
+QUEUE = os.getenv('MQ_QUEUE')
 
-context = ssl.create_default_context()
-context.check_hostname = False
-context.verify_mode = ssl.CERT_NONE
+class MyListener(stomp.ConnectionListener):
+   def on_error(self, frame):
+       logger.error(f'Error: "{frame.body}"')
+   def on_message(self, frame):
+       logger.info(f'Message received: "{frame.body}"')
 
-params = pika.ConnectionParameters(
-   host='b-1a6e9d8b-302d-4391-a974-e813635ae438.mq.eu-north-1.amazonaws.com',
-   port=5671,
-   virtual_host='/',
-   credentials=credentials,
-   ssl_options=pika.SSLOptions(context)
-)
+conn = stomp.Connection([(HOST, PORT)])
+logger.debug(f'Connecting to {HOST}:{PORT}')
 
-connection = pika.BlockingConnection(params)
-channel = connection.channel()
+conn.set_listener('', MyListener())
+conn.set_ssl(for_hosts=[(HOST, PORT)])
+conn.connect(os.getenv('MQ_USER'), os.getenv('MQ_PASS'), wait=True)
+logger.info('Connected to ActiveMQ')
 
-# Publish message
-channel.basic_publish(
-   exchange='',
-   routing_key='queue_name',
-   body='test message'
-)
+conn.subscribe(destination=f'/queue/{QUEUE}', id=1, ack='auto')
+logger.debug(f'Subscribed to queue: {QUEUE}')
 
-connection.close()
-# Rest of connection code stays same
+test_msg = 'test message'
+conn.send(body=test_msg, destination=f'/queue/{QUEUE}')
+logger.debug(f'Sent message: {test_msg}')
+
+try:
+   logger.info('Listening for messages (Ctrl+C to exit)...')
+   while True: pass
+except KeyboardInterrupt:
+   logger.info('Disconnecting...')
+   conn.disconnect()
